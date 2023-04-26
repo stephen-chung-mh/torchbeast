@@ -768,7 +768,7 @@ class DeepAtariNet(nn.Module):
         baseline = baseline.view(T, B)
         action = action.view(T, B)
 
-        return (action, policy_logits, baseline), core_state
+        return dict(policy_logits=policy_logits, baseline=baseline, action=action), core_state
     
 def Net(observation_shape, num_actions, use_lstm, deep):
     if not deep:
