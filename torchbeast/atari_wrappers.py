@@ -49,7 +49,7 @@ class NoopResetEnv(gym.Wrapper):
         if self.override_num_noops is not None:
             noops = self.override_num_noops
         else:
-            noops = self.unwrapped.np_random.randint(1, self.noop_max + 1) #pylint: disable=E1101
+            noops = self.unwrapped.np_random.integers(1, self.noop_max + 1) #pylint: disable=E1101
         assert noops > 0
         obs = None
         for _ in range(noops):
@@ -92,6 +92,7 @@ class EpisodicLifeEnv(gym.Wrapper):
 
     def step(self, action):
         obs, reward, done, info = self.env.step(action)
+        info['true_done'] = done
         self.was_real_done = done
         # check current lives, make loss of life terminal,
         # then update lives to handle bonus lives
@@ -101,7 +102,7 @@ class EpisodicLifeEnv(gym.Wrapper):
             # so it's important to keep lives > 0, so that we only reset once
             # the environment advertises done.
             done = True
-        self.lives = lives
+        self.lives = lives        
         return obs, reward, done, info
 
     def reset(self, **kwargs):

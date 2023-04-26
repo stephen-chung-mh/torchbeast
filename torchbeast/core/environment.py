@@ -34,11 +34,13 @@ class Environment:
         self.episode_return = torch.zeros(1, 1)
         self.episode_step = torch.zeros(1, 1, dtype=torch.int32)
         initial_done = torch.ones(1, 1, dtype=torch.uint8)
+        initial_true_done = torch.ones(1, 1, dtype=torch.uint8)
         initial_frame = _format_frame(self.gym_env.reset())
         return dict(
             frame=initial_frame,
             reward=initial_reward,
             done=initial_done,
+            true_done=initial_true_done,
             episode_return=self.episode_return,
             episode_step=self.episode_step,
             last_action=initial_last_action,
@@ -46,23 +48,27 @@ class Environment:
 
     def step(self, action):
         frame, reward, done, unused_info = self.gym_env.step(action.item())
+        true_done = unused_info['true_done']
         self.episode_step += 1
         self.episode_return += reward
         episode_step = self.episode_step
         episode_return = self.episode_return
         if done:
             frame = self.gym_env.reset()
+        if true_done:
             self.episode_return = torch.zeros(1, 1)
             self.episode_step = torch.zeros(1, 1, dtype=torch.int32)
 
         frame = _format_frame(frame)
         reward = torch.tensor(reward).view(1, 1)
         done = torch.tensor(done).view(1, 1)
+        true_done = torch.tensor(true_done).view(1, 1)
 
         return dict(
             frame=frame,
             reward=reward,
             done=done,
+            true_done=true_done,
             episode_return=episode_return,
             episode_step=episode_step,
             last_action=action,

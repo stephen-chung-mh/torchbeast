@@ -21,8 +21,7 @@ import logging
 import os
 import time
 from typing import Dict
-
-
+import re
 
 def gather_metadata() -> Dict:
     date_start = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
@@ -213,3 +212,25 @@ class FileWriter:
     def _save_metadata(self) -> None:
         with open(self.paths["meta"], "w") as jsonfile:
             json.dump(self.metadata, jsonfile, indent=4, sort_keys=True)
+
+class Wandb():
+    def __init__(self, flags, subname=''):
+        import wandb
+        self.wandb = wandb
+        exp_name = flags.xpid + subname
+        tags = []
+        if subname == '_model': tags.append('model')
+        m = re.match(r'^v\d+', exp_name)
+        if m: tags.append(m[0])
+        self.wandb.init(
+            project='thinker',
+            config=flags,
+            entity=os.getenv('WANDB_USER', 'stephen-chung'),
+            reinit=True,
+            # Restore parameters
+            resume="allow",
+            id=exp_name,
+            name=exp_name,
+            tags=tags,
+        )
+        self.wandb.config.update(flags, allow_val_change=True)

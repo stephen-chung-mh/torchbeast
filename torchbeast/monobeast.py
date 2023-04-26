@@ -21,6 +21,8 @@ import time
 import timeit
 import traceback
 import typing
+from collections import deque
+import numpy as np
 
 os.environ["OMP_NUM_THREADS"] = "1"  # Necessary for multithreading.
 
@@ -46,6 +48,8 @@ parser.add_argument("--mode", default="train",
                     help="Training or test mode.")
 parser.add_argument("--xpid", default=None,
                     help="Experiment id (default: None).")
+parser.add_argument("--use_wandb", action="store_true",
+                        help="Whether to use wandb logging")
 
 # Training settings.
 parser.add_argument("--disable_checkpoint", action="store_true",
@@ -276,7 +280,7 @@ def learn(
 
         total_loss = pg_loss + baseline_loss + entropy_loss
 
-        episode_returns = batch["episode_return"][batch["done"]]
+        episode_returns = batch["episode_return"][batch["true_done"]]
         stats = {
             "episode_returns": tuple(episode_returns.cpu().numpy()),
             "mean_episode_return": torch.mean(episode_returns).item(),
@@ -302,6 +306,7 @@ def create_buffers(flags, obs_shape, num_actions) -> Buffers:
         frame=dict(size=(T + 1, *obs_shape), dtype=torch.uint8),
         reward=dict(size=(T + 1,), dtype=torch.float32),
         done=dict(size=(T + 1,), dtype=torch.bool),
+        true_done=dict(size=(T + 1,), dtype=torch.bool),
         episode_return=dict(size=(T + 1,), dtype=torch.float32),
         episode_step=dict(size=(T + 1,), dtype=torch.int32),
         policy_logits=dict(size=(T + 1, num_actions), dtype=torch.float32),
@@ -399,19 +404,20 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
 
     logger = logging.getLogger("logfile")
     stat_keys = [
-        "total_loss",
-        "mean_episode_return",
+        "total_loss",        
+        "rmean_episode_return",
+        "episode_returns",
         "pg_loss",
         "baseline_loss",
         "entropy_loss",
     ]
     logger.info("# Step\t%s", "\t".join(stat_keys))
 
-    step, stats = 0, {}
+    step, stats, last_returns = 0, {}, deque(maxlen=400)
 
     def batch_and_learn(i, lock=threading.Lock()):
         """Thread target for the learning process."""
-        nonlocal step, stats
+        nonlocal step, stats, last_returns
         timings = prof.Timings()
         while step < flags.total_steps:
             timings.reset()
@@ -425,7 +431,9 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
             )
             stats = learn(
                 flags, model, learner_model, batch, agent_state, optimizer, scheduler
-            )
+            )            
+            last_returns.extend(stats["episode_returns"])
+            stats['rmean_episode_return'] = np.mean(last_returns) if len(last_returns) > 0 else 0.
             timings.time("learn")
             with lock:
                 to_log = dict(step=step)
@@ -462,6 +470,8 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
         )
 
     timer = timeit.default_timer
+    if flags.use_wandb:
+        wlogger = file_writer.Wandb(flags)
     try:
         last_checkpoint_time = timer()
         while step < flags.total_steps:
@@ -474,21 +484,18 @@ def train(flags):  # pylint: disable=too-many-branches, too-many-statements
                 last_checkpoint_time = timer()
 
             sps = (step - start_step) / (timer() - start_time)
-            if stats.get("episode_returns", None):
-                mean_return = (
-                    "Return per episode: %.1f. " % stats["mean_episode_return"]
-                )
-            else:
-                mean_return = ""
+
             total_loss = stats.get("total_loss", float("inf"))
-            logging.info(
-                "Steps %i @ %.1f SPS. Loss %f. %sStats:\n%s",
+            log_str = "Steps %i @ %.1f SPS. Loss %f. Return. %s" % (
                 step,
                 sps,
                 total_loss,
-                mean_return,
-                pprint.pformat(stats),
+                np.mean(last_returns) if len(last_returns) > 0 else 0.,                
             )
+            for s in ["pg_loss", "baseline_loss", "entropy_loss"]:
+                if s in stats: log_str += " %s %.2f" % (s, stats[s])
+            logging.info(log_str)
+            wlogger.wandb.log(stats, step=step)
     except KeyboardInterrupt:
         return  # Try joining actors then quit.
     else:
